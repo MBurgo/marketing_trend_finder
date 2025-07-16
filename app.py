@@ -3,6 +3,7 @@ import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo   # Python 3.9+
 
 import streamlit as st
 from summarizer import summarize
@@ -11,7 +12,7 @@ from summarizer import summarize
 # Page Config
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="🇦🇺 Finance Trends | Motley Fool AU",
+    page_title="🇦🇺 Finance Trends Finder",
     layout="centered",
 )
 
@@ -44,15 +45,16 @@ LAST_RUN_FILE     = DATA_DIR / "last_run.txt"
 LAST_SUMMARY_FILE = DATA_DIR / "last_summary.md"
 COOLDOWN_HOURS    = 3
 
+AEST = ZoneInfo("Australia/Brisbane")
 
-def _last_run_time() -> datetime | None:
+def _last_run_time_utc() -> datetime | None:
     if LAST_RUN_FILE.exists():
         return datetime.fromisoformat(LAST_RUN_FILE.read_text().strip())
     return None
 
 
 def _within_cooldown() -> bool:
-    last = _last_run_time()
+    last = _last_run_time_utc()
     return last and (datetime.utcnow() - last < timedelta(hours=COOLDOWN_HOURS))
 
 
@@ -81,9 +83,17 @@ st.markdown("<br>", unsafe_allow_html=True)
 if st.button("🔍 Generate Today's Summary"):
 
     if _within_cooldown() and LAST_SUMMARY_FILE.exists():
-        # Serve cached summary
-        cached_at = _last_run_time().strftime("%I:%M %p UTC")
-        st.info(f"Serving cached summary generated at **{cached_at}** (≤ {COOLDOWN_HOURS} h ago).")
+        last_run_utc = _last_run_time_utc()
+        next_time_utc = last_run_utc + timedelta(hours=COOLDOWN_HOURS)
+        next_time_aest = next_time_utc.astimezone(AEST)
+
+        st.info(
+            "Serving cached summary generated at "
+            f"**{last_run_utc.astimezone(AEST).strftime('%I:%M %p %d %b %Y AEST')}** "
+            f"(cool-down {COOLDOWN_HOURS} h).\n\n"
+            f"You can generate a fresh summary after "
+            f"{next_time_aest.strftime('%I:%M %p %d %b %Y AEST')}."
+        )
         _display_summary(LAST_SUMMARY_FILE.read_text())
         st.stop()
 
@@ -95,15 +105,11 @@ if st.button("🔍 Generate Today's Summary"):
 
         summary_raw = summarize().lstrip("n").strip()  # remove stray 'n' if present
 
-        # Cache timestamp & summary
+        # Cache timestamp & summary (timestamp saved in UTC)
         LAST_RUN_FILE.write_text(datetime.utcnow().isoformat())
         LAST_SUMMARY_FILE.write_text(summary_raw)
 
     _display_summary(summary_raw)
     st.success("✅ Summary generated successfully!")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Footer
-# ──────────────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("🧑‍💻 _Built by Burgo_")
+# ────────────────────────────────────────────────────
