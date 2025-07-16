@@ -1,0 +1,15 @@
+# Core app & UI
+streamlit>=1.31
+
+# Data handling
+pandas>=2.0
+
+# APIs & HTTP
+openai>=1.0
+requests>=2.31
+python-dotenv>=1.0
+feedparser>=6.0
+praw>=7.7     # Reddit API wrapper
+
+# Optional: remove if not used
+# numpy>=1.24
