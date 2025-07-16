@@ -2,51 +2,67 @@
 """
 Generate an executive-level markdown summary of today’s AU-finance headlines.
 
-• Creates data/ on-the-fly.
-• If any CSV is missing, runs its collector script (under scripts/).
-• Reads CSVs only after they’re guaranteed to exist.
+Key design decisions
+--------------------
+* **No work at import-time** – critical for Streamlit Cloud stability.
+* Creates data/ folder if absent.
+* Lazily runs each collector script if its CSV is missing.
+* Removes accidental ```markdown fences in the LLM output.
 """
-
 from __future__ import annotations
-import os, subprocess
+
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv, find_dotenv
 from openai import OpenAI
 
-# ── ENV & CONSTANTS ────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Environment & constants
+# ──────────────────────────────────────────────────────────────────────────────
 load_dotenv(find_dotenv())
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-DATA_DIR = Path("data")
+REPO_DIR  = Path(__file__).resolve().parent          # /mount/src/marketing_trend_finder
+DATA_DIR  = REPO_DIR / "data"
+SCRIPTS_DIR = REPO_DIR / "scripts"
+
 DATA_DIR.mkdir(exist_ok=True)
 
-CSV_INFO: dict[str, list[str]] = {
-    "reddit_hot.csv":          ["scripts/reddit_hot_posts.py"],
-    "yahoo_news.csv":          ["scripts/yahoo_finance_au_rss.py"],
-    "google_trends_rising.csv":["scripts/google_trends_serpapi.py"],
+CSV_INFO = {
+    "reddit_hot.csv":          SCRIPTS_DIR / "reddit_hot_posts.py",
+    "yahoo_news.csv":          SCRIPTS_DIR / "yahoo_finance_au_rss.py",
+    "google_trends_rising.csv": SCRIPTS_DIR / "google_trends_serpapi.py",
 }
 
-# ── HELPERS ────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Helper: ensure each CSV exists (run collector lazily if not)
+# ──────────────────────────────────────────────────────────────────────────────
 def _ensure_csvs() -> None:
-    """Create each CSV by calling its collector the first time it’s missing."""
-    for csv_name, collect_cmd in CSV_INFO.items():
+    for csv_name, script_path in CSV_INFO.items():
         csv_path = DATA_DIR / csv_name
         if not csv_path.exists():
-            subprocess.run(["python", *collect_cmd], check=True)
+            subprocess.run(
+                [sys.executable, str(script_path)], check=True, cwd=REPO_DIR
+            )
 
-# ── PUBLIC API ────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Main public function – called by Streamlit app
+# ──────────────────────────────────────────────────────────────────────────────
 def summarize() -> str:
-    """Return a pure-markdown summary (no code-block fences)."""
-    _ensure_csvs()                                # <-- guarantee CSVs exist
+    """Return pure-markdown executive summary (no code-block fences)."""
+    _ensure_csvs()
 
-    reddit  = pd.read_csv(DATA_DIR / "reddit_hot.csv")
-    yahoo   = pd.read_csv(DATA_DIR / "yahoo_news.csv")
-    gtrends = pd.read_csv(DATA_DIR / "google_trends_rising.csv")
+    # Load freshly-generated CSVs
+    reddit   = pd.read_csv(DATA_DIR / "reddit_hot.csv")
+    yahoo    = pd.read_csv(DATA_DIR / "yahoo_news.csv")
+    gtrends  = pd.read_csv(DATA_DIR / "google_trends_rising.csv")
     all_headlines = pd.concat([reddit, yahoo, gtrends], ignore_index=True)
 
-    # ─ Build LLM prompt -------------------------------------------------------
+    # Build LLM prompt
     prompt = (
         "Given the following Australian finance headlines, identify 4–5 strategic, "
         "high-level emerging themes. For each theme provide:\n"
@@ -66,19 +82,23 @@ def summarize() -> str:
         else:
             prompt += f"- {row['query']}\n"
 
-    # ─ Call GPT-4o ------------------------------------------------------------
+    # Call GPT-4o
     resp = client.chat.completions.create(
-        model="gpt-4.1",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.5,
     )
+
     summary = resp.choices[0].message.content.strip()
 
-    # ─ Clean accidental fences -----------------------------------------------
+    # Remove accidental ```markdown fences if present
     if summary.lower().startswith("```markdown"):
         summary = summary.split("\n", 1)[1].rstrip("`").strip()
-    return summary.strip("` ")
+    summary = summary.strip("` ")
 
-# CLI helper
+    return summary
+
+
+# Local CLI test
 if __name__ == "__main__":
     print(summarize())
