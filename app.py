@@ -1,10 +1,11 @@
-# app.py
 import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo   # Python 3.9+
 
+import os
+import pandas as pd
 import streamlit as st
 from summarizer import summarize
 
@@ -47,6 +48,22 @@ COOLDOWN_HOURS    = 3
 
 AEST = ZoneInfo("Australia/Brisbane")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Debug: Data Folder Contents
+# ──────────────────────────────────────────────────────────────────────────────
+st.sidebar.header("🔍 Debug: data folder contents")
+if st.sidebar.checkbox("Show data files"):
+    files = sorted(os.listdir(DATA_DIR))
+    st.sidebar.write(files or "No files yet")
+    if files:
+        latest = sorted(
+            (DATA_DIR / f for f in files),
+            key=lambda p: p.stat().st_mtime
+        )[-1]
+        st.sidebar.write(f"👀 Previewing `{latest.name}`")
+        st.sidebar.dataframe(pd.read_csv(latest))
+
+
 def _last_run_time_utc() -> datetime | None:
     if LAST_RUN_FILE.exists():
         return datetime.fromisoformat(LAST_RUN_FILE.read_text().strip())
@@ -66,7 +83,6 @@ def _display_summary(summary_markdown: str) -> None:
             with st.container(border=True):
                 st.markdown(sec.strip(), unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Header
@@ -92,16 +108,16 @@ if st.button("🔍 Generate Today's Summary"):
             f"**{last_run_utc.astimezone(AEST).strftime('%I:%M %p %d %b %Y AEST')}** "
             f"(cool-down {COOLDOWN_HOURS} h).\n\n"
             f"You can generate a fresh summary after "
-            f"{next_time_aest.strftime('%I:%M %p %d %b %Y AEST')}."
+            f"{next_time_aest.strftime('%I:%M %p %d %b %Y AEST')}"
         )
         _display_summary(LAST_SUMMARY_FILE.read_text())
         st.stop()
 
     # Otherwise generate a fresh summary
     with st.spinner("Fetching headlines and generating insights …"):
-        subprocess.run(["python", "scripts/reddit_hot_posts.py"])
-        subprocess.run(["python", "scripts/yahoo_finance_au_rss.py"])
-        subprocess.run(["python", "scripts/google_trends_serpapi.py"])
+        subprocess.run(["python", "scripts/reddit_hot_posts.py"] )
+        subprocess.run(["python", "scripts/yahoo_finance_au_rss.py"] )
+        subprocess.run(["python", "scripts/google_trends_serpapi.py"] )
 
         summary_raw = summarize().lstrip("n").strip()  # remove stray 'n' if present
 
@@ -111,5 +127,3 @@ if st.button("🔍 Generate Today's Summary"):
 
     _display_summary(summary_raw)
     st.success("✅ Summary generated successfully!")
-
-# ────────────────────────────────────────────────────
