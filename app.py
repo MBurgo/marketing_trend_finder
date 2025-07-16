@@ -1,16 +1,17 @@
 # app.py
 import os
 import re
+import sys                 # 👈 NEW
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo   # Python 3.9+
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
 
 # ─────────────────────────────────────────────────────────────
-# Page config & simple theme
+# Page config & theme
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="🇦🇺 Finance Trends Finder", layout="centered")
 
@@ -56,7 +57,6 @@ def _within_cooldown() -> bool:
 
 
 def _display_summary(md: str) -> None:
-    """Render markdown, split on standalone '---' lines for nicer boxes."""
     sections = re.split(r"\n---\n", md)
     for sec in sections:
         if sec.strip():
@@ -65,28 +65,34 @@ def _display_summary(md: str) -> None:
                 st.markdown("<br>", unsafe_allow_html=True)
 
 
-def run_collector(cmd: list[str], label: str) -> None:
-    """Run a collector script and surface its stderr if it fails."""
+def run_collector(script: str, label: str) -> None:
+    """Run a collector with the same interpreter that runs Streamlit."""
     try:
-        res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        res = subprocess.run(
+            [sys.executable, script],    # 👈 use sys.executable
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         if res.stdout:
             st.sidebar.write(f"✅ {label} OK:\n{res.stdout}")
     except subprocess.CalledProcessError as e:
         st.error(
             f"❌ {label} failed (exit {e.returncode}).\n\n"
-            f"Stderr output:\n{e.stderr or '— no stderr —'}"
+            f"Stderr:\n{e.stderr or '— no stderr —'}"
         )
         st.stop()
 
 # ─────────────────────────────────────────────────────────────
-# Runtime sanity-check sidebar (always visible)
+# Runtime sanity-check sidebar
 # ─────────────────────────────────────────────────────────────
 with st.sidebar.expander("🛠 Runtime sanity check", expanded=False):
+    st.write("**sys.executable:**", sys.executable)
     st.write("**Current working directory:**", os.getcwd())
     st.write("**DATA_DIR absolute path:**", DATA_DIR.resolve())
     st.write(
         "**Current contents of `data/`:**",
-        [p.name for p in DATA_DIR.iterdir()] if DATA_DIR.exists() else "— empty —",
+        [p.name for p in DATA_DIR.iterdir()] or "— empty —",
     )
 
 # ─────────────────────────────────────────────────────────────
@@ -101,10 +107,9 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🔍 Generate today's summary"):
 
-    # 1) Serve cached markdown if still in cooldown
     if _within_cooldown() and LAST_SUMMARY_FILE.exists():
         last_run_utc = _last_run_time_utc()
-        next_time    = last_run_utc + timedelta(hours=COOLDOWN_HOURS)
+        next_time = last_run_utc + timedelta(hours=COOLDOWN_HOURS)
         st.info(
             "Serving cached summary generated at "
             f"**{last_run_utc.astimezone(AEST).strftime('%I:%M %p %d %b %Y AEST')}** "
@@ -115,18 +120,14 @@ if st.button("🔍 Generate today's summary"):
         _display_summary(LAST_SUMMARY_FILE.read_text())
         st.stop()
 
-    # 2) Run collector scripts
     with st.spinner("Fetching headlines and generating insights …"):
-        run_collector(["python", "scripts/reddit_hot_posts.py"],   "Reddit collector")
-        run_collector(["python", "scripts/yahoo_finance_au_rss.py"], "Yahoo collector")
-        run_collector(["python", "scripts/google_trends_serpapi.py"], "Trends collector")
+        run_collector("scripts/reddit_hot_posts.py",   "Reddit collector")
+        run_collector("scripts/yahoo_finance_au_rss.py", "Yahoo collector")
+        run_collector("scripts/google_trends_serpapi.py", "Trends collector")
 
-        # 3) Import summarizer *after* CSVs exist
-        from summarizer import summarize
-
+        from summarizer import summarize  # CSVs now exist
         summary_raw = summarize().lstrip("n").strip()
 
-        # 4) Cache timestamp & summary
         LAST_RUN_FILE.write_text(datetime.utcnow().isoformat())
         LAST_SUMMARY_FILE.write_text(summary_raw)
 
