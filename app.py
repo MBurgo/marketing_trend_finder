@@ -4,7 +4,7 @@ import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo  # Python 3.9+
+from zoneinfo import ZoneInfo   # Python 3.9+
 
 import pandas as pd
 import streamlit as st
@@ -12,10 +12,7 @@ import streamlit as st
 # ─────────────────────────────────────────────────────────────
 # Page config & simple theme
 # ─────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="🇦🇺 Finance Trends Finder",
-    layout="centered",
-)
+st.set_page_config(page_title="🇦🇺 Finance Trends Finder", layout="centered")
 
 st.markdown(
     """
@@ -36,7 +33,7 @@ th                           { background-color: #f2f2f2; font-weight: 600; }
 # ─────────────────────────────────────────────────────────────
 # Paths & cooldown settings
 # ─────────────────────────────────────────────────────────────
-DATA_DIR          = Path("data")
+DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
 LAST_RUN_FILE     = DATA_DIR / "last_run.txt"
@@ -44,7 +41,9 @@ LAST_SUMMARY_FILE = DATA_DIR / "last_summary.md"
 COOLDOWN_HOURS    = 3
 AEST              = ZoneInfo("Australia/Brisbane")
 
-
+# ─────────────────────────────────────────────────────────────
+# Helper functions
+# ─────────────────────────────────────────────────────────────
 def _last_run_time_utc() -> datetime | None:
     if LAST_RUN_FILE.exists():
         return datetime.fromisoformat(LAST_RUN_FILE.read_text().strip())
@@ -56,52 +55,61 @@ def _within_cooldown() -> bool:
     return bool(last and (datetime.utcnow() - last < timedelta(hours=COOLDOWN_HOURS)))
 
 
-def _display_summary(summary_markdown: str) -> None:
-    """Split summary on stand-alone ‘---’ lines and render neatly."""
-    sections = re.split(r"\n---\n", summary_markdown)
+def _display_summary(md: str) -> None:
+    """Render markdown, split on standalone '---' lines for nicer boxes."""
+    sections = re.split(r"\n---\n", md)
     for sec in sections:
         if sec.strip():
             with st.container(border=True):
                 st.markdown(sec.strip(), unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
 
+
+def run_collector(cmd: list[str], label: str) -> None:
+    """Run a collector script and surface its stderr if it fails."""
+    try:
+        res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if res.stdout:
+            st.sidebar.write(f"✅ {label} OK:\n{res.stdout}")
+    except subprocess.CalledProcessError as e:
+        st.error(
+            f"❌ {label} failed (exit {e.returncode}).\n\n"
+            f"Stderr output:\n{e.stderr or '— no stderr —'}"
+        )
+        st.stop()
+
 # ─────────────────────────────────────────────────────────────
-# Optional owner-only debug panel
-# Show it only if SHOW_DEBUG_FILES is set in env / secrets
+# Runtime sanity-check sidebar (always visible)
 # ─────────────────────────────────────────────────────────────
-if os.getenv("SHOW_DEBUG_FILES", "").lower() in {"1", "true", "yes"}:
-    with st.sidebar.expander("🔍 Debug: data folder", expanded=False):
-        files = sorted(p.name for p in DATA_DIR.glob("*"))
-        st.write(files or "No files yet")
-        if files:
-            latest = max(DATA_DIR.glob("*"), key=lambda p: p.stat().st_mtime)
-            st.caption(f"Preview of `{latest.name}`")
-            try:
-                st.dataframe(pd.read_csv(latest).head())
-            except Exception as e:
-                st.error(f"Could not read file: {e}")
+with st.sidebar.expander("🛠 Runtime sanity check", expanded=False):
+    st.write("**Current working directory:**", os.getcwd())
+    st.write("**DATA_DIR absolute path:**", DATA_DIR.resolve())
+    st.write(
+        "**Current contents of `data/`:**",
+        [p.name for p in DATA_DIR.iterdir()] if DATA_DIR.exists() else "— empty —",
+    )
 
 # ─────────────────────────────────────────────────────────────
 # Main UI
 # ─────────────────────────────────────────────────────────────
 st.title("🇦🇺 Today's Australian Finance Trends")
 st.markdown(
-    "This tool scrapes Google Trends, Yahoo Finance and AU-investing subreddits "
+    "This tool scrapes Google Trends, Yahoo Finance AU and AU-investing subreddits "
     "to surface emerging financial themes and actionable marketing angles."
 )
 st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🔍 Generate today's summary"):
 
-    # 1) Serve cached version if still in cooldown
+    # 1) Serve cached markdown if still in cooldown
     if _within_cooldown() and LAST_SUMMARY_FILE.exists():
         last_run_utc = _last_run_time_utc()
-        next_time = last_run_utc + timedelta(hours=COOLDOWN_HOURS)
+        next_time    = last_run_utc + timedelta(hours=COOLDOWN_HOURS)
         st.info(
             "Serving cached summary generated at "
             f"**{last_run_utc.astimezone(AEST).strftime('%I:%M %p %d %b %Y AEST')}** "
             f"(cool-down {COOLDOWN_HOURS} h). "
-            "You can generate a fresh summary after "
+            "You can generate a fresh one after "
             f"{next_time.astimezone(AEST).strftime('%I:%M %p %d %b %Y AEST')}."
         )
         _display_summary(LAST_SUMMARY_FILE.read_text())
@@ -109,9 +117,9 @@ if st.button("🔍 Generate today's summary"):
 
     # 2) Run collector scripts
     with st.spinner("Fetching headlines and generating insights …"):
-        subprocess.run(["python", "scripts/reddit_hot_posts.py"], check=True)
-        subprocess.run(["python", "scripts/yahoo_finance_au_rss.py"], check=True)
-        subprocess.run(["python", "scripts/google_trends_serpapi.py"], check=True)
+        run_collector(["python", "scripts/reddit_hot_posts.py"],   "Reddit collector")
+        run_collector(["python", "scripts/yahoo_finance_au_rss.py"], "Yahoo collector")
+        run_collector(["python", "scripts/google_trends_serpapi.py"], "Trends collector")
 
         # 3) Import summarizer *after* CSVs exist
         from summarizer import summarize
